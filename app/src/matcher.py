@@ -3,7 +3,7 @@ from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel
 from rapidfuzz import fuzz
-from extractor import CanonicalItem
+from app.src.extractor import CanonicalItem
 
 
 class MatchStatus(str, Enum):
