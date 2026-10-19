@@ -64,25 +64,33 @@ Follow these operational invariants:
    - Identify every distinct commercial product, service, subscription, or explicit fee (e.g., Shipping/Freight, Handling, Implementation).
    - Do NOT omit line items simply because they lack explicit table borders or appear as multi-line text entries.
    - For each line item:
-     * `line_type`: Classify as "PRODUCT", "SERVICE", or "FEE".
-     * `product_id`: Extract the SKU, Part Number, Catalog Code, or Model Number. If no explicit identifier exists, assign a sequential ID (e.g., "ITEM-1", "ITEM-2").
-     * `product_name`: Extract the concise commercial title or item name.
-     * `description_and_specs`: Capture all accompanying specifications, configurations, hardware attributes, or loose descriptive notes printed either inside the row or immediately beneath it.
+     * `page_number`: The 1-based page number where this specific line item appears.
+     * `raw_text`: The exact, unedited text string of the row or block as printed on the document.
+     * `line_type`: Classify as "PRODUCT", "SERVICE", "FEE", or "DISCOUNT".
+     * `product_id`: Extract the primary alphanumeric SKU, Part Number, Model Code, or Item Code (e.g., "EQP-WR-Z16-LJ-01", "CM8148", "OG-FNTS-CM8100-5YR"). 
+       - Look for column headers like "Part #", "Code", "Item #", "Model", or "Catalog ID".
+       - If a short alphanumeric model code appears in the description cell, prioritize extracting it into `product_id`.
+       - Never place pure part codes or SKUs into `description_and_specs` while leaving `product_id` as null.
+     * `product_name`: Concise commercial title or name of the item/service.
+     * `description_and_specs`: Captures functional specs, dimensions, port counts, or license tier descriptions. Exclude standalone product part numbers extracted into `product_id`.
      * `quantity`: Parse as a clean decimal/float. Strip units of measure (e.g., convert "4 pcs", "1.00 Appliance" into 4.0 or 1.0). If unspecified, default to 1.0.
+     * `unit_of_measure`: Capture unit strings if explicitly printed (e.g., "pcs", "ea", "months"), otherwise null.
      * `unit_price`: Clean numeric rate per unit. Strip all currency signs ($, €, ₹, USD, INR) and comma formatting.
      * `discount_percent`: Percentage discount applied directly to this line if specified, otherwise 0.0.
-     * `total_price`: The extended row total. If missing or misaligned, ensure it reflects quantity * unit_price.
-     * `extra_attributes`: Store any vendor-specific metadata present in the columns (e.g., "HSN_SAC", "UOM", "Lead_Time", "Serial_Number", "Rev") as dynamic key-value pairs.
+     * `total_price`: The extended row total printed on the page. Strip all currency signs and formatting.
+     * `attributes`: Store any vendor-specific metadata or extra columns (e.g., "HSN_SAC", "UOM", "Lead_Time", "Serial_Number", "Rev") as dynamic string key-value pairs.
 
 2. SUB-ITEMS & HIERARCHIES:
    - For nested sub-items (e.g., item 2.1 under item 2), extract each as an individual line item.
    - Maintain parent context in `product_name` or `description_and_specs` if necessary.
 
 3. FINANCIAL TOTALS & TAXES:
-   - `subtotal`: The pre-tax taxable base amount.
-   - `taxes_and_surcharges`: Dynamically capture all taxes, GST, VAT, duties, or local surcharges as key-value pairs (e.g., {"CGST (9%)": 3330.0, "SGST (9%)": 3330.0} or {"GST (9.0%)": 132.03}). The keys must preserve the tax name and rate, and values must be clean numeric floats.
-   - `grand_total`: The final payable invoice/quote total including all taxes, shipping, and fees.
-   - `currency`: Identify the primary 3-letter currency code (e.g., "USD", "INR", "EUR", "SGD"). Default to null if indeterminate.
+   - reported_subtotal: The pre-tax taxable amount printed explicitly on the document (null if not explicitly labeled).
+   - taxes_and_fees: Dynamically capture ONLY statutory taxes, freight, or surcharges that are EXPLICITLY printed on the document with non-zero or stated amounts.
+     * Use the exact label and rate printed on the document as the key, and the printed numeric value as a float.
+     * If the document has NO taxes listed, or if taxes are explicitly 0, not applicable, or excluded, return an EMPTY object: {}.
+     * NEVER invent or assume tax rates or copy example tax numbers.
+   - reported_grand_total: The final payable total printed explicitly on the document.
 
 4. EXCLUSIONS & BOUNDARIES:
    - Do NOT treat summary rows (e.g., "Subtotal", "Balance Due", "Total Taxable Amount", "Round Off") as individual line items. Map them to the corresponding totals fields.
@@ -90,25 +98,17 @@ Follow these operational invariants:
    - If description text has spilled into numeric columns due to layout OCR alignment, resolve the text into `description_and_specs` and normalize the numerical values.
 
 5. OUTPUT FORMAT:
-   - Output ONLY a valid JSON object matching the requested schema. 
-   - Do not include explanatory introductions, markdown code fences (```json ... ```), or commentary.
+   - Output ONLY a valid JSON object matching the requested schema.
+   - Do not compute, recalculate, or alter printed numbers. Extract only what is visibly printed.
 """.strip()
 
 
 def build_quote_extraction_user_prompt(page_numbers: List[int]) -> str:
-    """
-    Constructs the execution prompt for Stage 2 extraction.
-    Informs the model of which physical pages are attached and requests extraction.
-    """
-    if len(page_numbers) == 1:
-        return (
-            f"Extract all commercial quotation items, tax details, and financial totals "
-            f"from the attached image of Page {page_numbers[0]}."
-        )
-
-    pages_str = ", ".join(f"Page {p}" for p in page_numbers)
-    return (
-        f"Extract all commercial quotation items, tax details, and financial totals "
-        f"spanning across the attached images ({pages_str}). "
-        f"Consolidate all line items and resolve multi-page tables into a single unified record."
-    )
+  pages_str = ", ".join(f"Page {p}" for p in page_numbers)
+  return (
+      f"Extract all commercial quotation items and totals from the attached image(s) ({pages_str}).\n"
+      "CRITICAL INSTRUCTIONS:\n"
+      "1. You MUST extract every individual row from the items table into the 'items' list.\n"
+      "2. Do not return an empty 'items' list if there is a table of products/services visible on the page.\n"
+      "3. Extract the pre-tax row totals, quantities, and unit rates for each item."
+  )

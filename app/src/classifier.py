@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 class Classification:
 
-  def __init__(self, client: BaseLLMClient):
-    self.client = client
+  def __init__(self, llm_client: BaseLLMClient):
+    self.llm_client = llm_client
 
   def start_classification(self, images: List[Image.Image]) -> List[Image.Image]:
     if not images:
@@ -39,7 +39,7 @@ class Classification:
     user_content = build_page_classification_user_prompt(len(images))
 
     try:
-      response: DocumentClassificationResult = self.client.generate_response(
+      response: DocumentClassificationResult = self.llm_client.generate_response(
           system_prompt=system_prompt,
           user_content=user_content,
           response_schema=DocumentClassificationResult,

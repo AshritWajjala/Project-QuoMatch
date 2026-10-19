@@ -10,10 +10,11 @@ logger = setup_logger()
 class OllamaClient(BaseLLMClient):
     """Client for handling local models via Ollama."""
     
-    def __init__(self, model: str, timeout: int = 120, num_ctx: int = 16384, host_url: Optional[str]=None):
+    def __init__(self, model: str, num_predict: Optional[int]=None ,  timeout: int = 400, num_ctx: int = 16384, host_url: Optional[str]=None):
         self.host_url = host_url 
         self.model = model
         self.num_ctx = num_ctx
+        self.num_predict = num_predict
         self.client = Client(host=self.host_url, timeout=timeout) 
         logger.info(f"Initialized OllamaClient with host_url: {self.host_url}")
 
@@ -40,7 +41,7 @@ class OllamaClient(BaseLLMClient):
                 messages=messages,
                 model=self.model,
                 format=response_schema.model_json_schema(),
-                options={"temperature": temperature, "num_ctx": self.num_ctx}
+                options={"temperature": temperature, "num_ctx": self.num_ctx, "num_predict":self.num_predict}
             )
             logger.info("LLM response generated.")
                    
