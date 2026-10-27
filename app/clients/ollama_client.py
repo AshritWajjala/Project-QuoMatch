@@ -43,7 +43,8 @@ class OllamaClient(BaseLLMClient):
                 messages=messages,
                 model=self.model,
                 format=response_schema.model_json_schema(),
-                options={"temperature": temperature, "num_ctx": self.num_ctx, "num_predict":self.num_predict}
+                options={"temperature": temperature, "num_ctx": self.num_ctx, "num_predict":self.num_predict},
+                keep_alive="5m"
             )
             logger.info("LLM response generated.")
                    

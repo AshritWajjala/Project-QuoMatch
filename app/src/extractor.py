@@ -1,57 +1,148 @@
-from typing import List, Optional
+
+from pathlib import Path
+from typing import List, Optional, Union
 from PIL import Image
 
 from app.clients.base import BaseLLMClient
 from app.core.exceptions import setup_exception_handler, ExtractionError
 from app.core.logger import setup_logger
-from app.core.prompts import QUOTE_EXTRACTION_SYSTEM_PROMPT, build_quote_extraction_user_prompt
+from app.core.prompts import QUOTE_EXTRACTION_SYSTEM_PROMPT, build_quote_extraction_user_prompt, EMAIL_QUOTE_EXTRACTION_SYSTEM_PROMPT
 from app.schemas.page_extraction_schema import (
     QuoteExtractionPayload,
     CanonicalItem,
     DocumentReconciliation
 )
+from app.util.email_parser_utils import EmailIngestionService
 from app.util.utils import compress_image_to_bytes
 
 logger = setup_logger()
 setup_exception_handler()
 
+
 class Extraction:
+    """Handles multi-format extraction and deterministic math reconciliation for quotations.
+
+    Attributes:
+        llm_client (BaseLLMClient): Client interface for executing LLM inference.
+        reconciliation_tolerance (float): Maximum permissible delta for floating point
+            comparisons between line item calculations and stated totals.
+    """
+
     def __init__(self, llm_client: BaseLLMClient, reconciliation_tolerance: float = 0.05):
+        """Initializes the Extraction service.
+
+        Args:
+            llm_client (BaseLLMClient): The LLM client implementation to use.
+            reconciliation_tolerance (float, optional): Monetary tolerance for
+                reconciliation deltas. Defaults to 0.05.
+        """
         self.llm_client = llm_client
         self.reconciliation_tolerance = reconciliation_tolerance
-    
-    def initiate_extraction(self, images: List[Image.Image]):
-        
+
+    def initiate_pdf_extraction(self, images: List[Image.Image]) -> QuoteExtractionPayload:
+        """Extracts structured quote data from pre-classified PDF page images.
+
+        Args:
+            images (List[Image.Image]): Rendered PIL images of retained PDF document pages.
+
+        Returns:
+            QuoteExtractionPayload: Validated extraction payload adhering to schema.
+
+        Raises:
+            ExtractionError: If no images are supplied, image compression fails,
+                or model inference encounters an unhandled exception.
+        """
         # If there are no images extracted from classification process
         if not images:
             logger.info("No docs found for extraction.")
             raise ExtractionError("No docs found for extraction.")
-        
+
         # Initializing system prompt & user content for VLM
         system_prompt = QUOTE_EXTRACTION_SYSTEM_PROMPT
-        page_numbers = [i+1 for i in range(len(images))]
+        page_numbers = [i + 1 for i in range(len(images))]
         user_content = build_quote_extraction_user_prompt(page_numbers=page_numbers)
 
         try:
             compressed_img_list = [compress_image_to_bytes(img, max_dim=1600, quality=85) for img in images]
         except Exception as e:
-            raise ExtractionError(f"Error occurred while compressing images: {e}") from e        
-            
+            raise ExtractionError(f"Error occurred while compressing images: {e}") from e
+
         try:
             # Raw Data Extraction
             response: QuoteExtractionPayload = self.llm_client.generate_response(
                 system_prompt=system_prompt,
                 user_content=user_content,
                 response_schema=QuoteExtractionPayload,
-                images=compressed_img_list)
-            
+                images=compressed_img_list
+            )
             return response
-        
+
         except Exception as e:
-            logger.error(f"Error occured while trying to extract data from images: {e}") 
+            logger.error(f"Error occured while trying to extract data from images: {e}")
             raise ExtractionError(f"Extraction inference failed: {e}") from e
-    
+
+    def initiate_email_extraction(self, eml_source: Union[str, Path]) -> QuoteExtractionPayload:
+        """Extracts structured quote data directly from an RFC 822 email file (.eml).
+
+        Parses the email structure, prunes historical reply thread blocks,
+        and prompts the LLM in text-only mode to capture line items and unstructured
+        trailing specifications located underneath the quotation table.
+
+        Args:
+            eml_source (Union[str, Path]): Local file system path to the .eml file.
+
+        Returns:
+            QuoteExtractionPayload: Validated extraction payload adhering to schema.
+
+        Raises:
+            ExtractionError: If file loading, reply pruning, or model inference fails.
+        """
+        eml_path = Path(eml_source)
+        if not eml_path.exists():
+            logger.error(f"Email file not found: {eml_path.resolve()}")
+            raise ExtractionError(f"Email file not found at: {eml_path.resolve()}")
+
+        try:
+            cleaned_message_body = EmailIngestionService.extract_active_message_content(eml_path)
+        except Exception as e:
+            logger.error(f"Failed to parse and clean email content from {eml_path.name}: {e}")
+            raise ExtractionError(f"Email body extraction failed: {e}") from e
+
+        if not cleaned_message_body.strip():
+            logger.error(f"Extracted active email body is empty for {eml_path.name}")
+            raise ExtractionError("Email message body is empty after stripping reply history.")
+
+        system_prompt = EMAIL_QUOTE_EXTRACTION_SYSTEM_PROMPT
+        user_content = (
+            f"Extract all commercial quote line items, specifications, and totals from this active "
+            f"email message:\n\n{cleaned_message_body}"
+        )
+
+        try:
+            response: QuoteExtractionPayload = self.llm_client.generate_response(
+                system_prompt=system_prompt,
+                user_content=user_content,
+                response_schema=QuoteExtractionPayload,
+                images=None
+            )
+            return response
+        except Exception as e:
+            logger.error(f"Error occurred while extracting data from email: {e}")
+            raise ExtractionError(f"Email extraction inference failed: {e}") from e
+
     def _reconcile(self, payload: QuoteExtractionPayload) -> DocumentReconciliation:
+        """Executes deterministic math reconciliation and line-item delta verification.
+
+        Validates calculated line totals against stated rates and discounts, verifies
+        statutory taxes, checks reported grand totals against row sums, and normalizes
+        attributes into canonical representations.
+
+        Args:
+            payload (QuoteExtractionPayload): Raw extraction payload from PDF or Email.
+
+        Returns:
+            DocumentReconciliation: Fully verified, deterministic financial record.
+        """
         canonical_items: List[CanonicalItem] = []
         running_subtotal: float = 0.0
 
@@ -126,5 +217,3 @@ class Extraction:
             reconciliation_delta=reconciliation_delta,
             is_reconciled=is_reconciled,
         )
-                
-            
