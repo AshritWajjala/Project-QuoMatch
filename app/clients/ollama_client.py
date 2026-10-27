@@ -4,8 +4,10 @@ from app.core.exceptions import LLMClientError
 from ollama import Client
 from typing import Optional, List, Type, Any, Dict
 from pydantic import BaseModel
+from app.core.config import get_settings
 
 logger = setup_logger()
+settings = get_settings()
 
 class OllamaClient(BaseLLMClient):
     """Client for handling local models via Ollama."""
@@ -15,7 +17,7 @@ class OllamaClient(BaseLLMClient):
         self.model = model
         self.num_ctx = num_ctx
         self.num_predict = num_predict
-        self.client = Client(host=self.host_url, timeout=timeout) 
+        self.client = Client(host=self.host_url, timeout=settings.OLLAMA_TIMEOUT) 
         logger.info(f"Initialized OllamaClient with host_url: {self.host_url}")
 
     def generate_response(self,
@@ -23,7 +25,7 @@ class OllamaClient(BaseLLMClient):
                           user_content: str, 
                           response_schema: Type[BaseModel], 
                           images: Optional[List[bytes]], 
-                          temperature: float = 0.0
+                          temperature: float = settings.OLLAMA_TEMPERATURE
                           ) -> BaseModel:
         logger.info(f"Sending prompt to Ollama model --> ({self.model})...")
         

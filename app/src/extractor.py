@@ -6,7 +6,6 @@ from app.core.exceptions import setup_exception_handler, ExtractionError
 from app.core.logger import setup_logger
 from app.core.prompts import QUOTE_EXTRACTION_SYSTEM_PROMPT, build_quote_extraction_user_prompt
 from app.schemas.page_extraction_schema import (
-    RawExtractedItem,
     QuoteExtractionPayload,
     CanonicalItem,
     DocumentReconciliation
