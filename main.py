@@ -1,7 +1,7 @@
 from app.core.logger import setup_logger
 from app.core.exceptions import setup_exception_handler
 from app.clients.ollama_client import OllamaClient
-from app.util.utils import pdf_to_pil_images
+from app.ingestion.pdf_parser import PDFIngestion
 from app.src.classifier import Classification
 from app.src.extractor import Extraction
 from app.core.config import get_settings
@@ -25,16 +25,16 @@ def main():
     
     # 2. Convert pdf to List[Images]
     pdf_path = "/Users/ashritw/Documents/Projects/Project-QuoMatch/app/data/Camp Systems 1.pdf"
-    image_list = pdf_to_pil_images(pdf_path=pdf_path)
+    image_list = PDFIngestion.pdf_to_pil_images(pdf_path=pdf_path)
 
-    eml_path = "/Users/ashritw/Downloads/REQUIREMENT FOR _DELL (or) HP (or) LENOVO LAPTOP_.eml"
+    # eml_path = "/Users/ashritw/Downloads/REQUIREMENT FOR _DELL (or) HP (or) LENOVO LAPTOP_.eml"
     
     # 3. Run Classification
     # classifier = Classification(llm_client=classification_client)
-    # remote_classifier = Classification(llm_client=remote_classification_client)
+    remote_classifier = Classification(llm_client=remote_classification_client)
 
     
-    # classifier_result = remote_classifier.start_classification(images=image_list)
+    classifier_result = remote_classifier.start_classification(images=image_list)
     
     # 4. Run Extraction with the images returned by the classifier
     # extractor = Extraction(llm_client=extraction_client)
@@ -42,7 +42,7 @@ def main():
 
 
     # extraction_result = extractor.initiate_extraction(images=classifier_result)
-    extraction_result = remote_extractor.initiate_email_extraction(eml_source=eml_path)
+    extraction_result = remote_extractor.initiate_pdf_extraction(images=classifier_result)
     
     reconciled_result = remote_extractor._reconcile(payload=extraction_result)
     

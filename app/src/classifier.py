@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Set
 from PIL import Image
 
 from app.clients.base import BaseLLMClient
@@ -9,17 +9,45 @@ from app.core.prompts import (
     build_page_classification_user_prompt,
 )
 from app.schemas.page_classification_schema import DocumentClassificationResult
-from app.util.utils import compress_image_to_bytes
+from app.ingestion.pdf_parser import PDFIngestion
 
 logger = logging.getLogger(__name__)
 
 
 class Classification:
+  """
+  Handles the page classification workflow for multi-page documents using an LLM client.
+
+  Attributes:
+      llm_client (BaseLLMClient): The client used to interact with the LLM for classification.
+  """
 
   def __init__(self, llm_client: BaseLLMClient):
+    """
+    Initializes the Classification instance.
+
+    Args:
+        llm_client (BaseLLMClient): The LLM client instance to use for generating 
+            classification responses.
+    """   
+
     self.llm_client = llm_client
 
   def start_classification(self, images: List[Image.Image]) -> List[Image.Image]:
+    """
+    Classifies a list of page images to filter out non-commercial pages.
+
+      Args:
+          images (List[Image.Image]): A list of PIL Image objects representing the pages 
+              of a document.
+
+      Returns:
+          List[Image.Image]: A filtered list of PIL Image objects containing only commercial 
+              pages, or the original list if a single-page document or fallback occurs.
+
+      Raises:
+          ClassificationError: If an error occurs during image compression prior to inference.
+    """
     if not images:
       return []
 
@@ -29,14 +57,14 @@ class Classification:
       return images
 
     try:
-      compressed_img_list = [compress_image_to_bytes(img) for img in images]
+      compressed_img_list: List[Image.Image] = [PDFIngestion.compress_image_to_bytes(img) for img in images]
     except Exception as e:
       raise ClassificationError(
           f"Error occurred while compressing images: {e}"
       ) from e
 
-    system_prompt = PAGE_CLASSIFIER_SYSTEM_PROMPT
-    user_content = build_page_classification_user_prompt(len(images))
+    system_prompt: str = PAGE_CLASSIFIER_SYSTEM_PROMPT
+    user_content: str = build_page_classification_user_prompt(len(images))
 
     try:
       response: DocumentClassificationResult = self.llm_client.generate_response(
@@ -53,11 +81,11 @@ class Classification:
 
     # Log decisions for visibility
     for page in response.pages:
-      status = "KEEP" if page.is_commercial else "DROP"
+      status: str = "KEEP" if page.is_commercial else "DROP"
       logger.info("Page %d: [%s] - %s", page.page_index + 1, status, page.reason)
 
     # Collect unique indices to maintain chronological order and prevent duplicates
-    commercial_indices = {
+    commercial_indices: Set = {
         p.page_index
         for p in response.pages
         if p.is_commercial and 0 <= p.page_index < len(images)

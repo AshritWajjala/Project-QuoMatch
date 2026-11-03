@@ -4,9 +4,10 @@ from pathlib import Path
 import re
 from typing import Tuple
 from bs4 import BeautifulSoup
+from typing import Union
 
 
-class EmailIngestionService:
+class EmailIngestion:
   """Parses .eml RFC 822 files and strips historical reply chains."""
 
   REPLY_REGEX_PATTERNS = [
@@ -38,7 +39,7 @@ class EmailIngestionService:
   }
 
   @classmethod
-  def extract_active_message_content(cls, eml_path: Path) -> str:
+  def extract_active_message_content(cls, eml_path: Union[Path, str]) -> str:
     """Ingests an email file, strips previous historical reply chains, and returns cleaned active message content.
 
         Args:
@@ -54,7 +55,7 @@ class EmailIngestionService:
     return cls._clean_plain_text_content(raw_content)
 
   @classmethod
-  def _load_payload(cls, eml_path: Path) -> Tuple[str, bool]:
+  def _load_payload(cls, eml_path: Union[Path, str]) -> Tuple[str, bool]:
     """Loads and extracts the raw message body from an RFC 822 .eml file, prioritizing HTML over plain text.
 
         Args:

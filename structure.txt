@@ -1,0 +1,79 @@
+.
+├── LICENSE
+├── README.md
+├── app
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   └── __init__.cpython-313.pyc
+│   ├── clients
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── base.cpython-313.pyc
+│   │   │   └── ollama_client.cpython-313.pyc
+│   │   ├── base.py
+│   │   └── ollama_client.py
+│   ├── config
+│   │   ├── __init__.py
+│   │   └── settings.py
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── config.cpython-313.pyc
+│   │   │   ├── exceptions.cpython-313.pyc
+│   │   │   ├── logger.cpython-313.pyc
+│   │   │   └── prompts.cpython-313.pyc
+│   │   ├── config.py
+│   │   ├── exceptions.py
+│   │   ├── logger.py
+│   │   └── prompts.py
+│   ├── data
+│   │   ├── Camp Systems 1.pdf
+│   │   ├── IMI _30042020.pdf
+│   │   ├── Jump Trade - WR and Opengear-0409.pdf
+│   │   ├── Jump Trading India via SPSysnet - 4 x EQP-WR-Z16-LJ-01 - 26-122735.pdf
+│   │   ├── PI to S P Sysnet 20260617.pdf
+│   │   ├── RQ2607311269-01-SP Sysnet Pte Ltd-20260731.pdf
+│   │   ├── SPSYSNET -Jump Trade-Potron-MUM-18062026.xlsx
+│   │   ├── Verscale-Quote FS& Cisco (1).pdf
+│   │   ├── eCapsSOPH2024251502.pdf
+│   │   └── xgs-87.pdf
+│   ├── learn
+│   │   ├── images
+│   │   │   ├── page_1.png
+│   │   │   └── page_2.png
+│   │   ├── pymupdf_learn.py
+│   │   └── sample.py
+│   ├── schemas
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── page_classification_schema.cpython-313.pyc
+│   │   │   └── page_extraction_schema.cpython-313.pyc
+│   │   ├── page_classification_schema.py
+│   │   └── page_extraction_schema.py
+│   ├── src
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-313.pyc
+│   │   │   ├── classifier.cpython-313.pyc
+│   │   │   └── extractor.cpython-313.pyc
+│   │   ├── classifier.py
+│   │   ├── extractor.py
+│   │   └── matcher.py
+│   └── util
+│       ├── __pycache__
+│       │   ├── email_parser_utils.cpython-313.pyc
+│       │   └── utils.cpython-313.pyc
+│       ├── email_parser_utils.py
+│       └── utils.py
+├── logs
+│   └── app.log
+├── main.py
+├── pyproject.toml
+├── requirements.txt
+├── structure.txt
+└── uv.lock
+
+18 directories, 59 files

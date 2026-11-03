@@ -1,7 +1,7 @@
 
 from pathlib import Path
 from typing import List, Optional, Union
-from PIL import Image
+from PIL.Image import Image
 
 from app.clients.base import BaseLLMClient
 from app.core.exceptions import setup_exception_handler, ExtractionError
@@ -12,8 +12,8 @@ from app.schemas.page_extraction_schema import (
     CanonicalItem,
     DocumentReconciliation
 )
-from app.util.email_parser_utils import EmailIngestionService
-from app.util.utils import compress_image_to_bytes
+from app.ingestion.email_parser import EmailIngestion
+from app.ingestion.pdf_parser import PDFIngestion
 
 logger = setup_logger()
 setup_exception_handler()
@@ -39,11 +39,11 @@ class Extraction:
         self.llm_client = llm_client
         self.reconciliation_tolerance = reconciliation_tolerance
 
-    def initiate_pdf_extraction(self, images: List[Image.Image]) -> QuoteExtractionPayload:
+    def initiate_pdf_extraction(self, images: List[Image]) -> QuoteExtractionPayload:
         """Extracts structured quote data from pre-classified PDF page images.
 
         Args:
-            images (List[Image.Image]): Rendered PIL images of retained PDF document pages.
+            images (List[Image]): Rendered PIL images of retained PDF document pages.
 
         Returns:
             QuoteExtractionPayload: Validated extraction payload adhering to schema.
@@ -58,12 +58,12 @@ class Extraction:
             raise ExtractionError("No docs found for extraction.")
 
         # Initializing system prompt & user content for VLM
-        system_prompt = QUOTE_EXTRACTION_SYSTEM_PROMPT
-        page_numbers = [i + 1 for i in range(len(images))]
-        user_content = build_quote_extraction_user_prompt(page_numbers=page_numbers)
+        system_prompt: str = QUOTE_EXTRACTION_SYSTEM_PROMPT
+        page_numbers: List[int] = [i + 1 for i in range(len(images))]
+        user_content: str = build_quote_extraction_user_prompt(page_numbers=page_numbers)
 
         try:
-            compressed_img_list = [compress_image_to_bytes(img, max_dim=1600, quality=85) for img in images]
+            compressed_img_list: List[Image] = [PDFIngestion.compress_image_to_bytes(img, max_dim=1600, quality=85) for img in images]
         except Exception as e:
             raise ExtractionError(f"Error occurred while compressing images: {e}") from e
 
@@ -103,7 +103,7 @@ class Extraction:
             raise ExtractionError(f"Email file not found at: {eml_path.resolve()}")
 
         try:
-            cleaned_message_body = EmailIngestionService.extract_active_message_content(eml_path)
+            cleaned_message_body = EmailIngestion.extract_active_message_content(eml_path)
         except Exception as e:
             logger.error(f"Failed to parse and clean email content from {eml_path.name}: {e}")
             raise ExtractionError(f"Email body extraction failed: {e}") from e
@@ -129,6 +129,9 @@ class Extraction:
         except Exception as e:
             logger.error(f"Error occurred while extracting data from email: {e}")
             raise ExtractionError(f"Email extraction inference failed: {e}") from e
+
+    def initiate_excel_extraction(self, excel_source: Union[str, Path]) -> QuoteExtractionPayload:
+        pass
 
     def _reconcile(self, payload: QuoteExtractionPayload) -> DocumentReconciliation:
         """Executes deterministic math reconciliation and line-item delta verification.
