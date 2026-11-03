@@ -1,11 +1,7 @@
-from typing import Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
-
-
 # --------------------------------------------------------------------------
 # TIER 1: EXTRACTION SCHEMAS (What the VLM populates directly)
 # --------------------------------------------------------------------------
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -22,8 +18,8 @@ class RawExtractedItem(BaseModel):
       default="PRODUCT",
       description="Classification of the line item based on context.",
   )
-  product_name: str = Field(
-      ...,
+  product_name: Optional[str] = Field(
+      default=None,
       description=(
           "Concise commercial title or name of the product/service. Do NOT put"
           " pure catalog part numbers here if they can be placed in product_id."
@@ -97,7 +93,7 @@ class QuoteExtractionPayload(BaseModel):
   )
 
   items: List[RawExtractedItem] = Field(
-      default_factory=list,
+      ...,
       description="All commercial items detected across the supplied pages.",
   )
 

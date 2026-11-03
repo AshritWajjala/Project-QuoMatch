@@ -6,7 +6,8 @@ from PIL.Image import Image
 from app.clients.base import BaseLLMClient
 from app.core.exceptions import setup_exception_handler, ExtractionError
 from app.core.logger import setup_logger
-from app.core.prompts import QUOTE_EXTRACTION_SYSTEM_PROMPT, build_quote_extraction_user_prompt, EMAIL_QUOTE_EXTRACTION_SYSTEM_PROMPT
+from app.core.prompts import QUOTE_EXTRACTION_SYSTEM_PROMPT, build_quote_extraction_user_prompt, EMAIL_QUOTE_EXTRACTION_SYSTEM_PROMPT, EXCEL_QUOTE_EXTRACTION_SYSTEM_PROMPT, build_excel_quote_extraction_user_prompt
+
 from app.schemas.page_extraction_schema import (
     QuoteExtractionPayload,
     CanonicalItem,
@@ -14,6 +15,7 @@ from app.schemas.page_extraction_schema import (
 )
 from app.ingestion.email_parser import EmailIngestion
 from app.ingestion.pdf_parser import PDFIngestion
+from app.ingestion.excel_parser import ExcelIngestion
 
 logger = setup_logger()
 setup_exception_handler()
@@ -131,92 +133,169 @@ class Extraction:
             raise ExtractionError(f"Email extraction inference failed: {e}") from e
 
     def initiate_excel_extraction(self, excel_source: Union[str, Path]) -> QuoteExtractionPayload:
-        pass
+        """Extracts structured quote data directly from an Excel workbook (.xlsx, .xls).
 
-    def _reconcile(self, payload: QuoteExtractionPayload) -> DocumentReconciliation:
-        """Executes deterministic math reconciliation and line-item delta verification.
-
-        Validates calculated line totals against stated rates and discounts, verifies
-        statutory taxes, checks reported grand totals against row sums, and normalizes
-        attributes into canonical representations.
+        Ingests the active sheet, trims dead margin space, serializes the grid
+        into a normalized pipe-delimited text layout, and prompts the LLM in
+        text-only mode to capture line items, statutory taxes, and totals.
 
         Args:
-            payload (QuoteExtractionPayload): Raw extraction payload from PDF or Email.
+            excel_source (Union[str, Path]): Local file system path to the Excel file.
 
         Returns:
-            DocumentReconciliation: Fully verified, deterministic financial record.
+            QuoteExtractionPayload: Validated extraction payload conforming to schema.
+
+        Raises:
+            ExtractionError: If file loading, grid serialization, or model inference fails.
         """
-        canonical_items: List[CanonicalItem] = []
-        running_subtotal: float = 0.0
+        try:
+            markdown_content: str = ExcelIngestion.convert_excel_to_markdown(excel_path=excel_source)
+        except Exception as e:
+            logger.info(f"Error occured while trying to convert excel data to markdown: {e}")
+            raise ExtractionError(f"Extraction inference failed: {e}") from e
 
-        for idx, item in enumerate(payload.items, start=1):
-            discount_multiplier = 1.0 - (item.discount_percent / 100.0)
-            expected_row_total = round(
-                item.quantity * item.unit_price * discount_multiplier, 2
+        if not markdown_content.strip():
+            logger.error(f"Serialized Excel content is empty for {Path(excel_source).name}")
+            raise ExtractionError("Excel sheet is empty or contains no readable cells.")
+
+        system_prompt: str = EXCEL_QUOTE_EXTRACTION_SYSTEM_PROMPT
+        user_content: str = build_excel_quote_extraction_user_prompt(markdown_grid=markdown_content)
+    
+        try:
+            # Raw Data Extraction
+            response: QuoteExtractionPayload = self.llm_client.generate_response(
+                system_prompt=system_prompt,
+                user_content=user_content,
+                response_schema=QuoteExtractionPayload
             )
+            return response
 
-            row_delta = round(abs(expected_row_total - item.total_price), 2)
-            is_row_verified = row_delta <= self.reconciliation_tolerance
+        except Exception as e:
+            logger.error(f"Error occured while trying to extract data from excel(markdown): {e}")
+            raise ExtractionError(f"Extraction inference failed: {e}") from e        
+        
 
-            discrepancy_note: Optional[str] = None
-            if not is_row_verified:
-                discrepancy_note = (
-                    f"Row {idx} calculation mismatch: {item.quantity} * {item.unit_price} "
-                    f"(less {item.discount_percent}% disc) = {expected_row_total:.2f}, "
-                    f"but document reported {item.total_price:.2f} (delta: {row_delta:.2f})."
-                )
-                logger.warning(discrepancy_note)
+    def _reconcile(
+        self, payload: QuoteExtractionPayload
+    ) -> DocumentReconciliation:
+      """Executes deterministic math reconciliation and line-item delta verification.
 
-            canonical_items.append(
-                CanonicalItem(
-                    **item.model_dump(),
-                    math_verified=is_row_verified,
-                    row_delta=row_delta,
-                    discrepancy_note=discrepancy_note,
-                )
-            )
-            running_subtotal += item.total_price
+      Filters out misclassified summary/tax rows, validates calculated line
+      totals against stated rates and discounts, verifies statutory taxes, and
+      checks reported grand totals against row sums.
 
-        running_subtotal = round(running_subtotal, 2)
-        sum_taxes_and_fees = round(sum(payload.taxes_and_fees.values()), 2)
-        calculated_grand_total = round(running_subtotal + sum_taxes_and_fees, 2)
+      Args:
+          payload (QuoteExtractionPayload): Raw extraction payload from Excel,
+            PDF, or Email.
 
-        reconciliation_delta = round(
-            abs(calculated_grand_total - payload.reported_grand_total), 2
+      Returns:
+          DocumentReconciliation: Fully verified, deterministic financial
+          record.
+      """
+      # 1. Defense-in-depth: Filter summary and tax rows that slipped into items
+      summary_blacklist = {
+          "sub total",
+          "subtotal",
+          "grand total",
+          "total (in",
+          "total with",
+          "local tax",
+          "taxable amount",
+          "round off",
+          "balance due",
+      }
+
+      sanitized_raw_items = []
+      for item in payload.items:
+        check_targets = [
+            (item.product_name or "").lower(),
+            (item.description_and_specs or "").lower(),
+            (item.raw_text or "").lower(),
+        ]
+        is_summary = any(
+            any(keyword in target for keyword in summary_blacklist)
+            for target in check_targets
         )
-        is_reconciled = reconciliation_delta <= self.reconciliation_tolerance
-
-        if not is_reconciled:
-            logger.warning(
-                "Document reconciliation failed: Subtotal (%.2f) + Taxes/Fees (%.2f) ="
-                " %.2f, but Reported Grand Total is %.2f (delta: %.2f)",
-                running_subtotal,
-                sum_taxes_and_fees,
-                calculated_grand_total,
-                payload.reported_grand_total,
-                reconciliation_delta,
-            )
+        if not is_summary:
+          sanitized_raw_items.append(item)
         else:
-            logger.info(
-                "Document reconciled successfully: %.2f == %.2f (delta: %.2f)",
-                calculated_grand_total,
-                payload.reported_grand_total,
-                reconciliation_delta,
-            )
+          logger.info(
+              "Filtered summary row misclassified as line item: %s",
+              item.raw_text or item.description_and_specs,
+          )
 
-        return DocumentReconciliation(
-            quote_number=payload.quote_number,
-            quote_date=payload.quote_date,
-            vendor_name=payload.vendor_name,
-            currency=payload.currency,
-            total_rows_extracted=len(canonical_items),
-            items=canonical_items,
-            calculated_subtotal=running_subtotal,
-            reported_subtotal=payload.reported_subtotal,
-            total_taxes_and_fees=sum_taxes_and_fees,
-            taxes_and_fees_breakdown=payload.taxes_and_fees,
-            reported_grand_total=payload.reported_grand_total,
-            calculated_grand_total=calculated_grand_total,
-            reconciliation_delta=reconciliation_delta,
-            is_reconciled=is_reconciled,
+      canonical_items: List[CanonicalItem] = []
+      running_subtotal: float = 0.0
+
+      for idx, item in enumerate(sanitized_raw_items, start=1):
+        discount_multiplier = 1.0 - (item.discount_percent / 100.0)
+        expected_row_total = round(
+            item.quantity * item.unit_price * discount_multiplier, 2
         )
+
+        row_delta = round(abs(expected_row_total - item.total_price), 2)
+        is_row_verified = row_delta <= self.reconciliation_tolerance
+
+        discrepancy_note: Optional[str] = None
+        if not is_row_verified:
+          discrepancy_note = (
+              f"Row {idx} calculation mismatch: {item.quantity} *"
+              f" {item.unit_price} (less {item.discount_percent}% disc) ="
+              f" {expected_row_total:.2f}, but document reported"
+              f" {item.total_price:.2f} (delta: {row_delta:.2f})."
+          )
+          logger.warning(discrepancy_note)
+
+        canonical_items.append(
+            CanonicalItem(
+                **item.model_dump(),
+                math_verified=is_row_verified,
+                row_delta=row_delta,
+                discrepancy_note=discrepancy_note,
+            )
+        )
+        running_subtotal += item.total_price
+
+      running_subtotal = round(running_subtotal, 2)
+      sum_taxes_and_fees = round(sum(payload.taxes_and_fees.values()), 2)
+      calculated_grand_total = round(running_subtotal + sum_taxes_and_fees, 2)
+
+      reconciliation_delta = round(
+          abs(calculated_grand_total - payload.reported_grand_total), 2
+      )
+      is_reconciled = reconciliation_delta <= self.reconciliation_tolerance
+
+      if not is_reconciled:
+        logger.warning(
+            "Document reconciliation failed: Subtotal (%.2f) + Taxes/Fees"
+            " (%.2f) = %.2f, but Reported Grand Total is %.2f (delta: %.2f)",
+            running_subtotal,
+            sum_taxes_and_fees,
+            calculated_grand_total,
+            payload.reported_grand_total,
+            reconciliation_delta,
+        )
+      else:
+        logger.info(
+            "Document reconciled successfully: %.2f == %.2f (delta: %.2f)",
+            calculated_grand_total,
+            payload.reported_grand_total,
+            reconciliation_delta,
+        )
+
+      return DocumentReconciliation(
+          quote_number=payload.quote_number,
+          quote_date=payload.quote_date,
+          vendor_name=payload.vendor_name,
+          currency=payload.currency,
+          total_rows_extracted=len(canonical_items),
+          items=canonical_items,
+          calculated_subtotal=running_subtotal,
+          reported_subtotal=payload.reported_subtotal,
+          total_taxes_and_fees=sum_taxes_and_fees,
+          taxes_and_fees_breakdown=payload.taxes_and_fees,
+          reported_grand_total=payload.reported_grand_total,
+          calculated_grand_total=calculated_grand_total,
+          reconciliation_delta=reconciliation_delta,
+          is_reconciled=is_reconciled,
+      )

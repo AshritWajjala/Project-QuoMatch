@@ -6,3 +6,4 @@ pandas>=2.0.0
 pymupdf
 ollama
 beautifulsoup4
+openpyxl

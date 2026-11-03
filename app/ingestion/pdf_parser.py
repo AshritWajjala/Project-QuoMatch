@@ -1,6 +1,6 @@
 import io
 from pathlib import Path
-from typing import List
+from typing import List, Union
 from PIL import Image
 import pymupdf 
 
@@ -15,7 +15,7 @@ class PDFIngestion:
     """
 
     @classmethod
-    def pdf_to_pil_images(cls, pdf_path: str, dpi: int = 200) -> List[Image.Image]:
+    def pdf_to_pil_images(cls, pdf_path: Union[str, Path], dpi: int = 200) -> List[Image.Image]:
         """
         Renders all pages of a PDF into a list of PIL Images using PyMuPDF.
         """
