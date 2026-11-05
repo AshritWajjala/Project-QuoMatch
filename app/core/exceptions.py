@@ -1,7 +1,7 @@
-import sys
-import os
-import traceback
 import logging
+import os
+import sys
+import traceback
 
 logger = logging.getLogger("app")
 
@@ -27,6 +27,18 @@ class ExtractionError(QuoMatchException):
 
 class MathInvariantError(QuoMatchException):
     """Raised when deterministic arithmetic validation fails."""
+    pass
+
+class MatchingError(QuoMatchException):
+    """Raised when the comparison or waterfall matching pipeline fails."""
+    pass
+
+class AmbiguousMatchError(MatchingError):
+    """Raised when multiple candidate items produce identical top confidence scores."""
+    pass
+
+class MissingAnchorError(MatchingError):
+    """Raised when the Client BOM or target baseline contains no valid items to compare against."""
     pass
 
 
@@ -58,7 +70,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         else:
             location_info = "at unknown location"
 
-        print(f"\n❌[Error] {exc_type.__name__}: {exc_value}", file=sys.stderr)
+        print(f"\n❌ [Error] {exc_type.__name__}: {exc_value}", file=sys.stderr)
         print(f"📍 Location: {location_info}", file=sys.stderr)
         print("💡 Tip: Set DEBUG=true to view the full stack trace.\n", file=sys.stderr)
 

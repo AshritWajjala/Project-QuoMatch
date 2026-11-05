@@ -20,7 +20,7 @@ class OllamaClient(BaseLLMClient):
       num_ctx: int = 32768,
       host_url: Optional[str] = None,
   ):
-    self.host_url = host_url
+    self.host_url = host_url 
     self.model = model
     self.num_ctx = num_ctx
     self.num_predict = num_predict if num_predict is not None else -1

@@ -1,2 +1,7 @@
 Support for .xlsx file
 Table View for end user before Extraction phase
+
+
+
+Issues
+1. Comparison: Vendors may quote in IND or USD (and may not mention) --> setting default currency is critical issue.
