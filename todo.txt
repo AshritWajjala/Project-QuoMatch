@@ -1,6 +1,8 @@
 Support for .xlsx file
 Table View for end user before Extraction phase
-
+need support for direct img upload
+need to dev frontend (for comparison with color difference)
+need to dev schema for client (as it doesn't contain price etc...)
 
 
 Issues

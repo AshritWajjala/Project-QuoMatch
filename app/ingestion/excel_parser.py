@@ -2,6 +2,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Tuple, Union
 import openpyxl
+import xlrd
+import pandas as pd
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.core.exceptions import QuoMatchException
@@ -36,6 +38,14 @@ class ExcelIngestion:
             raise QuoMatchException(f"Excel file not found: {path.resolve()}")
 
         try:
+            target_path = path
+            
+            # Handle old .xls format by converting it to .xlsx in-memory via pandas & xlrd
+            if path.suffix.lower() == ".xls":
+                df = pd.read_excel(path, sheet_name=0, engine="xlrd")
+                target_path = path.with_suffix(".xlsx")
+                df.to_excel(target_path, index=False, engine="openpyxl")
+                
             # data_only=True evaluates and returns cached formula results
             wb = openpyxl.load_workbook(filename=path, data_only=True)
             return wb.active

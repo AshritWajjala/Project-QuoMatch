@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     # --- LLM Client & Ollama Configurations ---
+    GEMINI_API_KEY: Optional[SecretStr] = Field(
+        default=None,
+        description="API Key for Gemini."   
+    )
     OLLAMA_HOST_URL: Optional[str] = Field(
         default=None,
         description="Base URL for Ollama. Defaults to None (uses localhost:11434)."

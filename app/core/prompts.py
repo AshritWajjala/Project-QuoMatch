@@ -60,47 +60,46 @@ Analyze the provided document page image(s) and extract the quotation details in
 
 Follow these operational invariants:
 
-1. LINE ITEMS IDENTIFICATION:
-- Identify every distinct commercial product, service, subscription, or explicit fee (e.g., Shipping/Freight, Handling, Implementation).
-- Do NOT omit line items simply because they lack explicit table borders or appear as multi-line text entries.
+1. DOCUMENT HEADER & METADATA (CRITICAL):
+- `vendor_name`: Legal business entity issuing the quote, found in the top letterhead, logo, or footer (e.g., "SP Sysnet Private Limited"). Do NOT return null if a vendor name or header is visible.
+- `quote_number`: The primary quotation, estimate, or reference identifier (e.g., "QTIN-MUM-00106-v1"). Look for labels like "Quotation", "Quote #", "Ref No", or "Estimate #".
+- `quote_date`: Issue date in YYYY-MM-DD format if available, otherwise verbatim date string.
+- `currency`: Standard 3-letter currency code (e.g., "INR", "USD", "EUR", "SGD"). Look at unit column headers, total indicators, or explicit currency fields.
+
+2. LINE ITEMS EXTRACTION (MANDATORY FIELD POPULATION):
+- Identify every distinct commercial product, service, subscription, or fee.
 - For each line item:
-- `page_number`: The 1-based page number where this specific line item appears.
-- `raw_text`: The exact, unedited text string of the row or block as printed on the document.
-- `line_type`: Classify as "PRODUCT", "SERVICE", "FEE", or "DISCOUNT".
-- `product_id`: Extract the primary alphanumeric SKU, Part Number, Model Code, or Item Code (e.g., "EQP-WR-Z16-LJ-01", "CM8148", "OG-FNTS-CM8100-5YR"). 
-- Look for column headers like "Part #", "Code", "Item #", "Model", or "Catalog ID".
-- If a short alphanumeric model code appears in the description cell, prioritize extracting it into `product_id`.
-- Never place pure part codes or SKUs into `description_and_specs` while leaving `product_id` as null.
-- `product_name`: Concise commercial title or name of the item/service.
-- `description_and_specs`: Captures functional specs, dimensions, port counts, or license tier descriptions. Exclude standalone product part numbers extracted into `product_id`.
-- `quantity`: Parse as a clean decimal/float. Strip units of measure (e.g., convert "4 pcs", "1.00 Appliance" into 4.0 or 1.0). If unspecified, default to 1.0.
-- `unit_of_measure`: Capture unit strings if explicitly printed (e.g., "pcs", "ea", "months"), otherwise null.
-- `unit_price`: Clean numeric rate per unit. Strip all currency signs ($, €, ₹, USD, INR) and comma formatting.
-- `discount_percent`: Percentage discount applied directly to this line if specified, otherwise 0.0.
-- `total_price`: The extended row total printed on the page. Strip all currency signs and formatting.
-- `attributes`: Store any vendor-specific metadata or extra columns (e.g., "HSN_SAC", "UOM", "Lead_Time", "Serial_Number", "Rev") as dynamic string key-value pairs.
+  - `page_number`: 1-based page number where this row appears.
+  - `raw_text`: Verbatim, unedited text string of the row or block as printed.
+  - `line_type`: Classify strictly as "PRODUCT", "SERVICE", "FEE", or "DISCOUNT".
+  - `product_id`: The alphanumeric part number, SKU, or model code (e.g., "EQP-WR-Z16-LJ-01", "CM8148", "OG-FNTS-CM8100-5YR").
+    - If a dedicated code column exists, extract it here.
+    - If a standalone alphanumeric part number is printed inside the description cell, prioritize extracting it into `product_id`.
+  - `product_name`: Concise commercial title (e.g., "WR Z16-LJ 1U White Rabbit Clock", "Model CM8148", "5-Year Foundation Support"). Do NOT leave this null if title text exists.
+  - `description_and_specs`: Captures functional specs, dimensions, port counts, or support tier details (e.g., "16x 1GbE SFP connectors. 4x SMA 3.3V/50ohm...", "48 serial straight pinout..."). Do NOT leave null when technical specifications are present in the row.
+  - `quantity`: Clean numeric float (e.g., 4.0, 2.0).
+  - `unit_of_measure`: Printed unit string (e.g., "pcs", "ea"), otherwise null.
+  - `unit_price`: Base rate per unit as float. Strip currency signs and thousands separators.
+  - `discount_percent`: Item-level discount percentage as float, default to 0.0.
+  - `total_price`: The extended row total printed on the page. Strip currency signs and commas.
+  - `attributes`: Dynamic key-value pairs for extra table columns ONLY if they are explicitly printed as column headers or key-value pairs in that specific row. NEVER invent, hallucinate, or copy example keys (like serial numbers or lead times) if they are not printed on the document. If no extra columns exist, return an empty dictionary: {}.
 
-2. SUB-ITEMS & HIERARCHIES:
-- For nested sub-items (e.g., item 2.1 under item 2), extract each as an individual line item.
-- Maintain parent context in `product_name` or `description_and_specs` if necessary.
+3. SUB-ITEMS & HIERARCHIES:
+- For nested sub-items (e.g., item 2.1 under item 2), extract each as an independent line item.
+- Retain parent context in `product_name` or `description_and_specs`.
 
-3. FINANCIAL TOTALS & TAXES:
-- reported_subtotal: The pre-tax taxable amount printed explicitly on the document (null if not explicitly labeled).
-- taxes_and_fees: Dynamically capture ONLY statutory taxes, freight, or surcharges that are EXPLICITLY printed on the document with non-zero or stated amounts.
-- Use the exact label and rate printed on the document as the key, and the printed numeric value as a float.
-- If the document has NO taxes listed, or if taxes are explicitly 0, not applicable, or excluded, return an EMPTY object: 
-{}.
-- NEVER invent or assume tax rates or copy example tax numbers.
-- reported_grand_total: The final payable total printed explicitly on the document.
+4. FINANCIAL TOTALS & TAXES:
+- `reported_subtotal`: The pre-tax taxable amount printed explicitly on the document (e.g., 6852906.00). If not labeled, return null.
+- `taxes_and_fees`: Dynamically capture ONLY statutory taxes, freight, or surcharges explicitly printed on the document.
+  - Use the exact label and rate printed (e.g., {"CGST (9.0%)": 616761.54, "SGST (9.0%)": 616761.54}).
+  - If no taxes are listed or if explicitly 0, return an empty dictionary: {}.
+  - NEVER invent tax rates or extrapolate numbers.
+- `reported_grand_total`: The final payable total printed explicitly on the document (e.g., 8086429.08).
 
-4. EXCLUSIONS & BOUNDARIES:
-- Do NOT treat summary rows (e.g., "Subtotal", "Balance Due", "Total Taxable Amount", "Round Off") as individual line items. Map them to the corresponding totals fields.
-- Discard all boilerplate legal text, warranty terms, bank payment details (IBAN, SWIFT, Account numbers), company registration IDs (GSTIN, CIF), and signature block metadata.
-- If description text has spilled into numeric columns due to layout OCR alignment, resolve the text into `description_and_specs` and normalize the numerical values.
-
-5. OUTPUT FORMAT:
-- Output ONLY a valid JSON object matching the requested schema.
-- Do not compute, recalculate, or alter printed numbers. Extract only what is visibly printed.
+5. EXCLUSIONS & BOUNDARIES:
+- Do NOT treat summary rows (Subtotal, Total, GST) as line items. Map them to totals fields.
+- Discard boilerplate legal terms, bank payment details, and signature blocks.
+- Output ONLY valid JSON conforming to QuoteExtractionPayload. Do not wrap in markdown quotes if raw JSON is expected.
 """.strip()
 
 

@@ -257,7 +257,8 @@ class Extraction:
         running_subtotal += item.total_price
 
       running_subtotal = round(running_subtotal, 2)
-      sum_taxes_and_fees = round(sum(payload.taxes_and_fees.values()), 2)
+      taxes_dict = {tax.name: tax.amount for tax in payload.taxes_and_fees}
+      sum_taxes_and_fees = round(sum(taxes_dict.values()), 2)
       calculated_grand_total = round(running_subtotal + sum_taxes_and_fees, 2)
 
       reconciliation_delta = round(
@@ -293,7 +294,7 @@ class Extraction:
           calculated_subtotal=running_subtotal,
           reported_subtotal=payload.reported_subtotal,
           total_taxes_and_fees=sum_taxes_and_fees,
-          taxes_and_fees_breakdown=payload.taxes_and_fees,
+          taxes_and_fees_breakdown=taxes_dict,
           reported_grand_total=payload.reported_grand_total,
           calculated_grand_total=calculated_grand_total,
           reconciliation_delta=reconciliation_delta,
