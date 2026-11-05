@@ -432,18 +432,29 @@ class QuoteComparator:
         if not vendor_quotes:
             raise MatchingError("At least one vendor quote is required for comparison.")
 
-        vendors: List[str] = [q.vendor_name or f"Vendor_{i+1}" for i, q in enumerate(vendor_quotes)]
-        used_items: Dict[str, Set[int]] = {v: set() for v in vendors}
+        doc_metadata: Dict[str, str] = {}
+        doc_id_to_quote: Dict[str, DocumentReconciliation] = {}
+        all_doc_ids: List[str] = []
 
-        # Index normalized SKUs for Stage 1 lookups
+        for i, q in enumerate(vendor_quotes, start=1):
+            doc_id = getattr(q, "doc_id", None) or f"doc_{i}"
+            vendor_label = q.vendor_name or f"Vendor_{i}"
+            doc_metadata[doc_id] = vendor_label
+            doc_id_to_quote[doc_id] = q
+            all_doc_ids.append(doc_id)
+
+        used_items: Dict[str, Set[int]] = {d_id: set() for d_id in all_doc_ids}
+
+        # Index normalized SKUs by doc_id for Stage 1 lookups
         sku_maps: Dict[str, Dict[str, Tuple[int, CanonicalItem]]] = {}
-        for vendor_name, quote in zip(vendors, vendor_quotes):
+        for d_id in all_doc_ids:
+            quote = doc_id_to_quote[d_id]
             sku_map: Dict[str, Tuple[int, CanonicalItem]] = {}
             for idx, item in enumerate(quote.items):
                 clean = cls.clean_sku(item.product_id)
                 if clean:
                     sku_map[clean] = (idx, item)
-            sku_maps[vendor_name] = sku_map
+            sku_maps[d_id] = sku_map
 
         comparison_rows: List[ClientBOMComparisonRow] = []
 
@@ -455,11 +466,13 @@ class QuoteComparator:
             req_uom = bom_item.get("unit_of_measure")
 
             vendor_offers: Dict[str, Optional[VendorItemOffer]] = {}
-            missing_vendors: List[str] = []
+            missing_doc_ids: List[str] = []
 
-            for vendor_name, quote in zip(vendors, vendor_quotes):
-                used = used_items[vendor_name]
-                sku_map = sku_maps[vendor_name]
+            for d_id in all_doc_ids:
+                quote = doc_id_to_quote[d_id]
+                used = used_items[d_id]
+                sku_map = sku_maps[d_id]
+                vendor_display_name = doc_metadata[d_id]
 
                 try:
                     match = cls.match_item(
@@ -471,7 +484,7 @@ class QuoteComparator:
                         llm_client=llm_client,
                     )
                 except Exception as e:
-                    logger.error("Error matching row %d for vendor '%s': %s", row_idx, vendor_name, e)
+                    logger.error("Error matching row %d for doc_id '%s': %s", row_idx, d_id, e)
                     match = None
 
                 if match:
@@ -481,8 +494,9 @@ class QuoteComparator:
                     discount_mult = 1.0 - (item.discount_percent / 100.0)
                     total_price = round(req_qty * item.unit_price * discount_mult, 2)
 
-                    vendor_offers[vendor_name] = VendorItemOffer(
-                        vendor_name=vendor_name,
+                    vendor_offers[d_id] = VendorItemOffer(
+                        doc_id=d_id,
+                        vendor_name=vendor_display_name,
                         quote_number=quote.quote_number,
                         matched_product_id=item.product_id,
                         matched_product_name=item.product_name,
@@ -497,23 +511,25 @@ class QuoteComparator:
                         spec_discrepancies=diffs,
                     )
                 else:
-                    vendor_offers[vendor_name] = None
-                    missing_vendors.append(vendor_name)
+                    vendor_offers[d_id] = None
+                    missing_doc_ids.append(d_id)
 
             # Price comparison for this row
             valid_bids = [
-                (v, offer.unit_price)
-                for v, offer in vendor_offers.items()
+                (d_id, offer.unit_price)
+                for d_id, offer in vendor_offers.items()
                 if offer is not None and offer.unit_price > 0
             ]
             lowest_unit_price: Optional[float] = None
-            recommended_vendor: Optional[str] = None
+            recommended_doc_id: Optional[str] = None
+            recommended_vendor_name: Optional[str] = None
             unit_savings: Optional[float] = None
             total_savings: Optional[float] = None
 
             if valid_bids:
                 valid_bids.sort(key=lambda x: x[1])
-                recommended_vendor, lowest_unit_price = valid_bids[0]
+                recommended_doc_id, lowest_unit_price = valid_bids[0]
+                recommended_vendor_name = doc_metadata.get(recommended_doc_id, "Unknown Vendor")
                 if len(valid_bids) > 1:
                     unit_savings = round(valid_bids[1][1] - lowest_unit_price, 2)
                     total_savings = round(unit_savings * req_qty, 2)
@@ -529,20 +545,23 @@ class QuoteComparator:
                     requested_quantity=req_qty,
                     unit_of_measure=req_uom,
                     vendor_offers=vendor_offers,
-                    missing_from_vendors=missing_vendors,
+                    missing_from_doc_ids=missing_doc_ids,
                     lowest_unit_price=lowest_unit_price,
-                    recommended_vendor=recommended_vendor,
+                    recommended_doc_id=recommended_doc_id,
+                    recommended_vendor_name=recommended_vendor_name,
                     potential_unit_savings=unit_savings,
                     potential_total_savings=total_savings,
                 )
             )
 
         # Identify extra items quoted by vendors but not present in the BOM
-        unsolicited_by_vendor: Dict[str, List[UnsolicitedVendorItem]] = {}
+        unsolicited_by_doc_id: Dict[str, List[UnsolicitedVendorItem]] = {}
         unsolicited_spend: Dict[str, float] = {}
 
-        for vendor_name, quote in zip(vendors, vendor_quotes):
-            used = used_items[vendor_name]
+        for d_id in all_doc_ids:
+            quote = doc_id_to_quote[d_id]
+            used = used_items[d_id]
+            vendor_display_name = doc_metadata[d_id]
             extras: List[UnsolicitedVendorItem] = []
             extra_total = 0.0
 
@@ -550,7 +569,8 @@ class QuoteComparator:
                 if idx not in used and item.total_price > 0:
                     extras.append(
                         UnsolicitedVendorItem(
-                            vendor_name=vendor_name,
+                            doc_id=d_id,
+                            vendor_name=vendor_display_name,
                             quote_number=quote.quote_number,
                             product_id=item.product_id,
                             product_name=item.product_name,
@@ -562,27 +582,30 @@ class QuoteComparator:
                     )
                     extra_total += item.total_price
 
-            unsolicited_by_vendor[vendor_name] = extras
-            unsolicited_spend[vendor_name] = round(extra_total, 2)
+            unsolicited_by_doc_id[d_id] = extras
+            unsolicited_spend[d_id] = round(extra_total, 2)
 
         # Calculate high-level summary KPIs
         total_requested = len(comparison_rows)
-        fully_matched = sum(1 for r in comparison_rows if not r.missing_from_vendors)
-        unmatched = sum(1 for r in comparison_rows if len(r.missing_from_vendors) == len(vendors))
+        fully_matched = sum(1 for r in comparison_rows if not r.missing_from_doc_ids)
+        unmatched = sum(1 for r in comparison_rows if len(r.missing_from_doc_ids) == len(all_doc_ids))
         partially_matched = total_requested - fully_matched - unmatched
 
         total_spend: Dict[str, float] = {}
         compliance_rates: Dict[str, float] = {}
 
-        for v in vendors:
+        for d_id in all_doc_ids:
             spend_sum = sum(
-                r.vendor_offers[v].total_price
+                r.vendor_offers[d_id].total_price
                 for r in comparison_rows
-                if r.vendor_offers.get(v) is not None
+                if r.vendor_offers.get(d_id) is not None
             )
-            total_spend[v] = round(spend_sum, 2)
-            matched_count = sum(1 for r in comparison_rows if r.vendor_offers.get(v) is not None)
-            compliance_rates[v] = round((matched_count / total_requested) * 100.0, 1) if total_requested else 0.0
+            total_spend[d_id] = round(spend_sum, 2)
+            matched_count = sum(1 for r in comparison_rows if r.vendor_offers.get(d_id) is not None)
+            compliance_rates[d_id] = (
+                round((matched_count / total_requested) * 100.0, 1)
+                if total_requested else 0.0
+            )
 
         optimal_hybrid = round(
             sum(
@@ -597,31 +620,37 @@ class QuoteComparator:
         max_savings = round(highest_spend - optimal_hybrid, 2) if highest_spend > optimal_hybrid else 0.0
 
         # Rank vendors: best catalog compliance first, then lowest total cost
-        ranked_vendors = sorted(vendors, key=lambda v: (-compliance_rates[v], total_spend[v]))
-        best_vendor = ranked_vendors[0] if ranked_vendors else None
+        ranked_doc_ids = sorted(
+            all_doc_ids,
+            key=lambda d: (-compliance_rates[d], total_spend[d]),
+        )
+        best_doc_id = ranked_doc_ids[0] if ranked_doc_ids else None
+        best_vendor_name = doc_metadata.get(best_doc_id) if best_doc_id else None
 
         logger.info(
-            "Comparison complete: %d items analyzed. Optimal spend: %s %.2f. Recommended vendor: %s",
+            "Comparison complete: %d items analyzed. Optimal spend: %s %.2f. Recommended: %s (%s)",
             total_requested,
             target_currency,
             optimal_hybrid,
-            best_vendor,
+            best_vendor_name,
+            best_doc_id,
         )
 
         return MultiVendorComparisonReport(
             client_name=client_name,
-            participating_vendors=vendors,
+            doc_metadata=doc_metadata,
             currency=target_currency,
             rows=comparison_rows,
-            unsolicited_items_by_vendor=unsolicited_by_vendor,
+            unsolicited_items_by_doc_id=unsolicited_by_doc_id,
             total_requested_items=total_requested,
             fully_matched_items=fully_matched,
             partially_matched_items=partially_matched,
             unmatched_items=unmatched,
-            vendor_compliance_rates=compliance_rates,
-            total_spend_by_vendor=total_spend,
-            unsolicited_spend_by_vendor=unsolicited_spend,
+            doc_compliance_rates=compliance_rates,
+            total_spend_by_doc_id=total_spend,
+            unsolicited_spend_by_doc_id=unsolicited_spend,
             optimal_hybrid_spend=optimal_hybrid,
             max_potential_savings=max_savings,
-            overall_recommended_vendor=best_vendor,
+            overall_recommended_doc_id=best_doc_id,
+            overall_recommended_vendor_name=best_vendor_name,
         )

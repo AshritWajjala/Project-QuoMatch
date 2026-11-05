@@ -22,7 +22,8 @@ class MatchVerdict(str, Enum):
 
 class VendorItemOffer(BaseModel):
     """Represents a single vendor's matched offering against a requested client item."""
-    vendor_name: str = Field(..., description="Name of the vendor providing the quote")
+    doc_id: str = Field(..., description="Unique immutable identifier of the source document")
+    vendor_name: str = Field(default="Unknown Vendor", description="Name of the vendor providing the quote")
     quote_number: Optional[str] = Field(default=None, description="Identifier of the source quotation")
     matched_product_id: Optional[str] = Field(default=None, description="Part number quoted by vendor")
     matched_product_name: Optional[str] = Field(default=None, description="Product title extracted from quote")
@@ -44,6 +45,7 @@ class VendorItemOffer(BaseModel):
 
 class UnsolicitedVendorItem(BaseModel):
     """An extra item quoted by a vendor that has no corresponding match in the Client BOM."""
+    doc_id: str = Field(..., description="Unique immutable identifier of the source document")
     vendor_name: str = Field(..., description="Vendor that added this unrequested item")
     quote_number: Optional[str] = Field(default=None, description="Source quote ID")
     product_id: Optional[str] = Field(default=None, description="Part number quoted by vendor")
@@ -73,14 +75,15 @@ class ClientBOMComparisonRow(BaseModel):
     )
     
     # Discrepancy flags for this specific BOM line
-    missing_from_vendors: List[str] = Field(
+    missing_from_doc_ids: List[str] = Field(
         default_factory=list,
         description="List of vendor names that completely omitted this required item"
     )
     
     # Price arbitration metrics
     lowest_unit_price: Optional[float] = Field(default=None, description="Lowest verified unit price among all vendors")
-    recommended_vendor: Optional[str] = Field(default=None, description="Vendor offering the lowest verified price")
+    recommended_doc_id: Optional[str] = Field(default=None, description="Winning doc_id")
+    recommended_vendor_name: Optional[str] = Field(default=None, description="Winning vendor display name")
     potential_unit_savings: Optional[float] = Field(default=None, description="Price spread between recommended and next best offer")
     potential_total_savings: Optional[float] = Field(default=None, description="Unit savings multiplied by requested quantity")
 
@@ -88,14 +91,14 @@ class ClientBOMComparisonRow(BaseModel):
 class MultiVendorComparisonReport(BaseModel):
     """Executive-level procurement report aggregating all rows, metrics, and global recommendations."""
     client_name: Optional[str] = Field(default="Client Requisition", description="Name of company or requisition project")
-    participating_vendors: List[str] = Field(default_factory=list, description="List of vendor names evaluated")
+    doc_metadata: Dict[str, str] = Field(default_factory=dict, description="Maps doc_id to vendor display name")
     currency: str = Field(default="USD", description="Target normalized currency across all comparisons")
     
     # Primary Matrix Rows (Aligned to Client BOM)
     rows: List[ClientBOMComparisonRow] = Field(default_factory=list, description="Row-by-row matrix lines")
     
     # Extra / Unsolicited Items (Items vendors quoted that were NOT in the Client BOM)
-    unsolicited_items_by_vendor: Dict[str, List[UnsolicitedVendorItem]] = Field(
+    unsolicited_items_by_doc_id: Dict[str, List[UnsolicitedVendorItem]] = Field(
         default_factory=dict,
         description="Extra items per vendor that have no counterpart in the Client BOM"
     )
@@ -107,17 +110,17 @@ class MultiVendorComparisonReport(BaseModel):
     unmatched_items: int = Field(default=0, description="Items missing from all vendor quotes")
     
     # Scope Compliance Metrics
-    vendor_compliance_rates: Dict[str, float] = Field(
+    doc_compliance_rates: Dict[str, float] = Field(
         default_factory=dict,
         description="Percentage of BOM items covered by vendor (e.g. {'Vendor A': 100.0, 'Vendor B': 80.0})"
     )
     
     # Global Spend Analysis
-    total_spend_by_vendor: Dict[str, float] = Field(
+    total_spend_by_doc_id: Dict[str, float] = Field(
         default_factory=dict, 
         description="Total cost if purchasing 100% of covered items from Vendor X"
     )
-    unsolicited_spend_by_vendor: Dict[str, float] = Field(
+    unsolicited_spend_by_doc_id: Dict[str, float] = Field(
         default_factory=dict,
         description="Total cost of extra items added by each vendor"
     )
@@ -129,7 +132,11 @@ class MultiVendorComparisonReport(BaseModel):
         default=0.0, 
         description="Difference between highest vendor total and optimal hybrid spend"
     )
-    overall_recommended_vendor: Optional[str] = Field(
-        default=None, 
-        description="Best single-source vendor by price and catalog coverage"
+    overall_recommended_doc_id: Optional[str] = Field(
+        default=None,
+        description="Unique document ID of the top-ranked single-source vendor by compliance and total spend",
+    )
+    overall_recommended_vendor_name: Optional[str] = Field(
+        default=None,
+        description="Human-readable display name of the top-ranked single-source vendor",
     )
