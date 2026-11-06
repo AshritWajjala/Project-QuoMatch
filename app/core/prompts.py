@@ -113,6 +113,17 @@ def build_quote_extraction_user_prompt(page_numbers: List[int]) -> str:
         "3. Extract the pre-tax row totals, quantities, and unit rates for each item."
     )
 
+CLIENT_BOM_EXTRACTION_SYSTEM_PROMPT = """You are an expert procurement auditor.
+Your task is to extract customer purchase requisitions and Bills of Materials (BOM).
+
+Rules:
+1. Extract every requested item, full product description, and required quantity.
+2. If a table has only a description column (e.g., 'Cisco 10GBASE-CU SFP+ Cable 3 Meter'), place the entire text into 'description'.
+3. Populate 'sku' ONLY if an isolated, distinct part number/model code exists (e.g. 'GLC-TE'). If it is a sentence or generic name, leave 'sku' null.
+4. Extract numeric quantities cleanly. Default to 1.0 if not specified.
+"""
+
+CLIENT_BOM_EXTRACTION_USER_CONTENT = """Extract all requested procurement line items, specifications, and quantities from this client requirement document."""
 
 # ==============================================================================
 # STAGE 2 (EMAIL): EMAIL QUOTE & LINE ITEM EXTRACTION PROMPTS

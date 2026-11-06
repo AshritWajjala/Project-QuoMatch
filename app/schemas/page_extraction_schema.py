@@ -20,6 +20,43 @@ class TaxOrFeeItem(BaseModel):
   )
   amount: float = Field(..., description="Numeric value of the tax or fee")
 
+class ClientBOMItem(BaseModel):
+  line_number: Optional[int] = Field(
+      default=None, description="Row index if numbered"
+  )
+  sku: Optional[str] = Field(
+      default=None,
+      description=(
+          "Explicit part number or model code ONLY if clearly isolated as an"
+          " alphanumeric code. If it is a sentence or description, leave null."
+      ),
+  )
+  description: str = Field(
+      ...,
+      description=(
+          "Full item text, name, and technical specifications requested by the"
+          " client."
+      ),
+  )
+  quantity: float = Field(
+      default=1.0,
+      description="Quantity required. Defaults to 1.0 if not specified.",
+  )
+  unit_of_measure: Optional[str] = Field(
+      default="pcs",
+      description="Unit of measure (e.g., pcs, units, meters, lot)",
+  )
+
+
+class ClientBOMPayload(BaseModel):
+  """Schema specifically for client requisitions, BOMs, RFQs, and purchase inquiries."""
+
+  project_or_client_name: Optional[str] = Field(
+      default=None, description="Client name or project title if present"
+  )
+  items: List[ClientBOMItem] = Field(
+      ..., description="All line items requested in the BOM"
+  )
 
 # --------------------------------------------------------------------------
 # TIER 1: EXTRACTION SCHEMAS (What the VLM populates directly)

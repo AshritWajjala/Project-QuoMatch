@@ -1,10 +1,9 @@
-"""Minimalist Executive Procurement & Quote Comparison Dashboard."""
+"""Executive Procurement Cross-Vendor Match & Coverage Dashboard."""
 
 from pathlib import Path
 import sys
 from typing import Any, Dict, List
 
-# Ensure project root is in sys.path
 PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -13,7 +12,6 @@ import pandas as pd
 import streamlit as st
 import tempfile
 
-from app.clients.gemini_client import GeminiClient
 from app.clients.ollama_client import OllamaClient
 from app.schemas.comparison_schema import MatchVerdict, MultiVendorComparisonReport
 from app.src.classifier import Classification
@@ -22,12 +20,14 @@ from app.src.extractor import Extraction
 from app.ingestion.pdf_parser import PDFIngestion
 from app.ingestion.excel_parser import ExcelIngestion
 from app.core.config import get_settings
+from app.core.prompts import (
+    CLIENT_BOM_EXTRACTION_SYSTEM_PROMPT,
+    CLIENT_BOM_EXTRACTION_USER_CONTENT,
+)
+from app.schemas.page_extraction_schema import ClientBOMPayload
 
 settings = get_settings()
 
-# --------------------------------------------------------------------------
-# PAGE CONFIGURATION & MINIMALIST STYLING
-# --------------------------------------------------------------------------
 st.set_page_config(
     page_title="QuoMatch | Procurement Intelligence",
     layout="wide",
@@ -48,9 +48,6 @@ st.markdown(
 )
 
 
-# --------------------------------------------------------------------------
-# INITIALIZE LLM & PIPELINE SERVICES
-# --------------------------------------------------------------------------
 @st.cache_resource
 def get_services():
     llm = OllamaClient(model=settings.CLASSIFIER_MODEL)
@@ -62,9 +59,6 @@ def get_services():
 classifier, extractor = get_services()
 
 
-# --------------------------------------------------------------------------
-# SIDEBAR: DOCUMENT INGESTION
-# --------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### Document Ingestion")
     st.caption("Upload Client BOM and Vendor Quote files.")
@@ -74,17 +68,16 @@ with st.sidebar:
         "Client BOM (PDF, Excel, or Image)", type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"]
     )
     vendor_files = st.file_uploader(
-        "Vendor Quotations (PDF, Excel, or Image)", type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"], accept_multiple_files=True
+        "Vendor Quotations (PDF, Excel, or Image)",
+        type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"],
+        accept_multiple_files=True,
     )
 
     st.divider()
-    run_btn = st.button("Run Comparison Pipeline", type="primary", use_container_width=True)
+    run_btn = st.button("Run Comparison Pipeline", type="primary", width="stretch")
 
-# --------------------------------------------------------------------------
-# MAIN DASHBOARD AREA
-# --------------------------------------------------------------------------
 st.markdown('<div class="main-title">QuoMatch Intelligence Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Automated VLM Extraction & Multi-Vendor Price Arbitration</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Cross-Vendor Requirement Verification & Specification Mapping</div>', unsafe_allow_html=True)
 
 
 def format_currency(amount: float | None, currency: str | None = "USD") -> str:
@@ -102,51 +95,56 @@ else:
         st.error("Please provide both a Client BOM file and at least one Vendor Quote file.")
         st.stop()
 
-    with st.spinner("Processing documents through VLM extraction & reconciliation..."):
+    with st.spinner("Processing documents through VLM extraction & multi-tier matching..."):
         try:
             # 1. Parse Client BOM
             client_bom: List[Dict[str, Any]] = []
-            
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=Path(client_file.name).suffix) as tmp_client:
                 tmp_client.write(client_file.getbuffer())
                 client_tmp_path = tmp_client.name
 
             try:
                 file_ext = Path(client_file.name).suffix.lower()
+                user_content = CLIENT_BOM_EXTRACTION_USER_CONTENT
+                images = None
+
                 if file_ext == ".pdf":
-                    client_images = PDFIngestion.pdf_to_pil_images(client_tmp_path)
-                    client_payload = extractor.initiate_pdf_extraction(client_images)
-                    for item in client_payload.items:
-                        client_bom.append({
-                            "product_id": item.product_id,
-                            "description": item.description_and_specs or item.raw_text,
-                            "quantity": item.quantity,
-                            "unit_of_measure": item.unit_of_measure,
-                        })
+                    raw_images = PDFIngestion.pdf_to_pil_images(client_tmp_path)
+                    images = [PDFIngestion.compress_image_to_bytes(img) for img in raw_images]
                 elif file_ext in [".png", ".jpg", ".jpeg"]:
                     from PIL import Image as PILImage
                     img = PILImage.open(client_tmp_path)
-                    client_payload = extractor.initiate_pdf_extraction(images=[img])
-                    for item in client_payload.items:
-                        client_bom.append({
-                            "product_id": item.product_id,
-                            "description": item.description_and_specs or item.raw_text,
-                            "quantity": item.quantity,
-                            "unit_of_measure": item.unit_of_measure,
-                        })
+                    images = [PDFIngestion.compress_image_to_bytes(img)]
                 else:
-                    excel_payload = extractor.initiate_excel_extraction(client_tmp_path)
-                    for item in excel_payload.items:
-                        client_bom.append({
-                            "product_id": item.product_id,
-                            "description": item.description_and_specs or item.raw_text,
-                            "quantity": item.quantity,
-                            "unit_of_measure": item.unit_of_measure,
-                        })
+                    markdown_grid = ExcelIngestion.convert_excel_to_markdown(client_tmp_path)
+                    user_content = f"{CLIENT_BOM_EXTRACTION_USER_CONTENT}\n\nClient BOM Table:\n{markdown_grid}"
+
+                client_payload: ClientBOMPayload = classifier.llm_client.generate_response(
+                    system_prompt=CLIENT_BOM_EXTRACTION_SYSTEM_PROMPT,
+                    user_content=user_content,
+                    response_schema=ClientBOMPayload,
+                    images=images,
+                )
+
+                for item in client_payload.items:
+                    raw_sku = (item.sku or "").strip()
+                    raw_desc = (item.description or "").strip()
+                    if " " in raw_sku or len(raw_sku) > 25:
+                        if not raw_desc:
+                            raw_desc = raw_sku
+                        raw_sku = None
+
+                    client_bom.append({
+                        "product_id": raw_sku if raw_sku else None,
+                        "description": raw_desc,
+                        "quantity": item.quantity,
+                        "unit_of_measure": item.unit_of_measure,
+                    })
             finally:
                 Path(client_tmp_path).unlink(missing_ok=True)
 
-            # 2. Parse Vendor Quote Files (PDF, Excel, or Image)
+            # 2. Parse Vendor Quote Files
             vendor_reconciliations = []
             for idx, v_file in enumerate(vendor_files, start=1):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=Path(v_file.name).suffix) as tmp_v:
@@ -181,6 +179,7 @@ else:
                 vendor_quotes=vendor_reconciliations,
                 target_currency=target_curr,
                 client_name="Client Requisition",
+                llm_client=classifier.llm_client,
             )
 
         except Exception as e:
@@ -188,84 +187,78 @@ else:
             st.exception(e)
             st.stop()
 
-    # --------------------------------------------------------------------------
-    # EXECUTIVE SUMMARY METRICS
-    # --------------------------------------------------------------------------
+    # --- TOP KPIS: REQUIREMENT FULFILLMENT AUDIT ---
+    total_reqs = report.total_requested_items
+    covered_reqs = sum(1 for r in report.rows if any(o is not None for o in r.vendor_offers.values()))
+    uncovered_reqs = total_reqs - covered_reqs
+    coverage_pct = (covered_reqs / total_reqs * 100) if total_reqs else 0.0
+
+    total_extra_spend = sum(report.unsolicited_spend_by_doc_id.values())
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Optimal Best Spend", format_currency(report.optimal_hybrid_spend, report.currency))
-    c2.metric("Total Potential Savings", format_currency(report.max_potential_savings, report.currency))
-    c3.metric("Top Recommended Vendor", report.overall_recommended_vendor_name or "N/A")
-    c4.metric("Extra Charges (Scope Creep)", format_currency(sum(report.unsolicited_spend_by_doc_id.values()), report.currency))
+    c1.metric("Total Client Requirements", f"{total_reqs} Items")
+    c2.metric("Requirements Covered", f"{covered_reqs} / {total_reqs}", f"{coverage_pct:.0f}%")
+    c3.metric("Uncovered Items", f"{uncovered_reqs} Items", delta="-Missing" if uncovered_reqs > 0 else "Complete", delta_color="inverse")
+    c4.metric("Scope Creep Charges", format_currency(total_extra_spend, report.currency))
 
     st.divider()
 
-    # --------------------------------------------------------------------------
-    # MASTER MATRIX TABS
-    # --------------------------------------------------------------------------
     tab_matrix, tab_audit, tab_json = st.tabs(["Comparison Matrix", "Vendor Breakdown", "Raw JSON Data"])
 
     with tab_matrix:
-        st.markdown("#### Master Comparison Matrix")
-        st.caption("Side-by-side vendor evaluation aligned against client bill of materials.")
+        st.markdown("#### Requirement Match & Availability Matrix")
+        st.caption("Direct cross-vendor line item verification against client requirements.")
 
-        # Legend
         st.markdown(
             """
             <div class="legend-box">
-                <div class="legend-item"><div class="legend-dot" style="background: #F0FDF4; border: 1px solid #22C55E;"></div> Best Match / Exact Item</div>
-                <div class="legend-item"><div class="legend-dot" style="background: #FEF3C7; border: 1px solid #D97706;"></div> Alternative Option</div>
-                <div class="legend-item"><div class="legend-dot" style="background: #FEF2F2; border: 1px solid #EF4444;"></div> Missing / Extra Item Not Quoted</div>
+                <div class="legend-item"><div class="legend-dot" style="background: #F0FDF4; border: 1px solid #22C55E;"></div> Item Covered (Exact or Compatible Match)</div>
+                <div class="legend-item"><div class="legend-dot" style="background: #FEF2F2; border: 1px solid #EF4444;"></div> Item Missing Across All Quotes</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
         matrix_rows = []
-        row_styles = []
+        row_status_list = []
 
         for row in report.rows:
-            sku_display = row.requested_sku if row.requested_sku else "Description Only"
             row_data = {
                 "Line": row.line_number,
-                "BOM Item": sku_display,
-                "Requirement Description": row.requested_description,
-                "Quantity": f"{row.requested_quantity:g} {row.unit_of_measure or ''}",
+                "Client Requirement": row.requested_description,
+                "Required Qty": f"{row.requested_quantity:g} {row.unit_of_measure or ''}".strip(),
             }
 
-            row_status = "identical"
+            matched_vendors = []
+            has_match = False
+
             for doc_id, v_name in report.doc_metadata.items():
                 offer = row.vendor_offers.get(doc_id)
-                is_winner = (doc_id == row.recommended_doc_id) and (offer is not None)
-
                 if offer:
-                    best_label = "[Best Choice] " if is_winner else ""
-                    status_tag = "Exact Match" if offer.verdict == MatchVerdict.IDENTICAL else "Alternative"
-                    row_data[f"{v_name}"] = f"{best_label}{format_currency(offer.total_price, offer.currency)} ({status_tag} @ {format_currency(offer.unit_price, offer.currency)}/ea)"
-                    if offer.verdict != MatchVerdict.IDENTICAL:
-                        row_status = "substitute"
+                    has_match = True
+                    matched_vendors.append(v_name)
+                    tag = "Exact" if offer.verdict == MatchVerdict.IDENTICAL else "Compatible"
+                    sku_prefix = f"[{offer.matched_product_id}] " if offer.matched_product_id else ""
+                    row_data[v_name] = f"Matched ({tag}) | {sku_prefix}{format_currency(offer.total_price, offer.currency)} (@ {format_currency(offer.unit_price, offer.currency)}/ea)"
                 else:
-                    row_data[f"{v_name}"] = "Not Quoted (Missing)"
-                    row_status = "missing"
+                    row_data[v_name] = "— Not Quoted —"
 
-            row_data["Recommended Winner"] = f"{row.recommended_vendor_name or 'None'} (Savings: {format_currency(row.potential_total_savings, report.currency)})"
+            row_data["Matched Vendor(s)"] = ", ".join(matched_vendors) if matched_vendors else "None (Unquoted)"
             matrix_rows.append(row_data)
-            row_styles.append(row_status)
+            row_status_list.append("covered" if has_match else "uncovered")
 
         matrix_df = pd.DataFrame(matrix_rows)
 
-        def color_entire_row(s):
-            status = row_styles[s.name]
-            if status == "identical":
+        def style_rows(s):
+            status = row_status_list[s.name]
+            if status == "covered":
                 return ["background-color: #F0FDF4; color: #0F172A;"] * len(s)
-            elif status == "substitute":
-                return ["background-color: #FEF3C7; color: #0F172A;"] * len(s)
             else:
                 return ["background-color: #FEF2F2; color: #991B1B;"] * len(s)
 
-        styled_df = matrix_df.style.apply(color_entire_row, axis=1)
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        styled_df = matrix_df.style.apply(style_rows, axis=1)
+        st.dataframe(styled_df, width="stretch", hide_index=True)
 
-        # Extra / Scope Creep Section
         st.markdown("#### Extra Unrequested Items (Scope Creep)")
         creep_found = False
         for doc_id, extras in report.unsolicited_items_by_doc_id.items():
@@ -274,16 +267,25 @@ else:
                 creep_found = True
                 st.warning(f"{v_name} added {len(extras)} extra unrequested item(s) totaling {format_currency(report.unsolicited_spend_by_doc_id[doc_id], report.currency)}.")
                 extra_items_df = pd.DataFrame([
-                    {"SKU": ex.product_id or "—", "Title": ex.product_name or ex.description_and_specs, "Qty": ex.quantity, "Total": format_currency(ex.total_price, report.currency)}
+                    {
+                        "SKU": ex.product_id or "—",
+                        "Title": ex.product_name or ex.description_and_specs,
+                        "Qty": ex.quantity,
+                        "Total": format_currency(ex.total_price, report.currency),
+                    }
                     for ex in extras
                 ])
-                st.dataframe(extra_items_df, use_container_width=True, hide_index=True)
+                st.dataframe(extra_items_df, width="stretch", hide_index=True)
         if not creep_found:
             st.success("All vendor quotes match the required list with zero extra unrequested charges.")
 
     with tab_audit:
         st.markdown("#### Vendor Quote Audit & Totals")
-        sel_doc = st.selectbox("Select Vendor Quote:", options=list(report.doc_metadata.keys()), format_func=lambda d: report.doc_metadata[d])
+        sel_doc = st.selectbox(
+            "Select Vendor Quote:",
+            options=list(report.doc_metadata.keys()),
+            format_func=lambda d: report.doc_metadata[d],
+        )
         target_quote = next(q for q in vendor_reconciliations if q.doc_id == sel_doc)
 
         col_a, col_b = st.columns(2)
@@ -302,7 +304,7 @@ else:
             }
             for i in target_quote.items
         ])
-        st.dataframe(items_df, use_container_width=True, hide_index=True)
+        st.dataframe(items_df, width="stretch", hide_index=True)
 
     with tab_json:
         st.json(report.model_dump())
