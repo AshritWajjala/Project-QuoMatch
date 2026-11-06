@@ -88,9 +88,8 @@ def format_currency(amount: float | None, currency: str | None = "USD") -> str:
     return f"{symbol}{amount:,.2f}"
 
 
-if not run_btn:
-    st.info("Upload your Client BOM and Vendor Quote files in the sidebar, then click Run Comparison Pipeline.")
-else:
+# Run pipeline only when button is pressed, saving output to session state
+if run_btn:
     if not client_file or not vendor_files:
         st.error("Please provide both a Client BOM file and at least one Vendor Quote file.")
         st.stop()
@@ -182,10 +181,22 @@ else:
                 llm_client=classifier.llm_client,
             )
 
+            # Save state across widget reruns
+            st.session_state["report"] = report
+            st.session_state["vendor_reconciliations"] = vendor_reconciliations
+
         except Exception as e:
             st.error(f"Pipeline execution failed: {e}")
             st.exception(e)
             st.stop()
+
+
+# Render results whenever available in session state
+if "report" not in st.session_state:
+    st.info("Upload your Client BOM and Vendor Quote files in the sidebar, then click Run Comparison Pipeline.")
+else:
+    report: MultiVendorComparisonReport = st.session_state["report"]
+    vendor_reconciliations = st.session_state["vendor_reconciliations"]
 
     # --- TOP KPIS: REQUIREMENT FULFILLMENT AUDIT ---
     total_reqs = report.total_requested_items
@@ -198,7 +209,12 @@ else:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Client Requirements", f"{total_reqs} Items")
     c2.metric("Requirements Covered", f"{covered_reqs} / {total_reqs}", f"{coverage_pct:.0f}%")
-    c3.metric("Uncovered Items", f"{uncovered_reqs} Items", delta="-Missing" if uncovered_reqs > 0 else "Complete", delta_color="inverse")
+    c3.metric(
+        "Uncovered Items",
+        f"{uncovered_reqs} Items",
+        delta="-Missing" if uncovered_reqs > 0 else "Complete",
+        delta_color="inverse",
+    )
     c4.metric("Scope Creep Charges", format_currency(total_extra_spend, report.currency))
 
     st.divider()
@@ -239,7 +255,10 @@ else:
                     matched_vendors.append(v_name)
                     tag = "Exact" if offer.verdict == MatchVerdict.IDENTICAL else "Compatible"
                     sku_prefix = f"[{offer.matched_product_id}] " if offer.matched_product_id else ""
-                    row_data[v_name] = f"Matched ({tag}) | {sku_prefix}{format_currency(offer.total_price, offer.currency)} (@ {format_currency(offer.unit_price, offer.currency)}/ea)"
+                    row_data[v_name] = (
+                        f"Matched ({tag}) | {sku_prefix}{format_currency(offer.total_price, offer.currency)} "
+                        f"(@ {format_currency(offer.unit_price, offer.currency)}/ea)"
+                    )
                 else:
                     row_data[v_name] = "— Not Quoted —"
 
@@ -265,7 +284,10 @@ else:
             v_name = report.doc_metadata.get(doc_id, doc_id)
             if extras:
                 creep_found = True
-                st.warning(f"{v_name} added {len(extras)} extra unrequested item(s) totaling {format_currency(report.unsolicited_spend_by_doc_id[doc_id], report.currency)}.")
+                st.warning(
+                    f"{v_name} added {len(extras)} extra unrequested item(s) totaling "
+                    f"{format_currency(report.unsolicited_spend_by_doc_id[doc_id], report.currency)}."
+                )
                 extra_items_df = pd.DataFrame([
                     {
                         "SKU": ex.product_id or "—",
@@ -285,6 +307,7 @@ else:
             "Select Vendor Quote:",
             options=list(report.doc_metadata.keys()),
             format_func=lambda d: report.doc_metadata[d],
+            key="vendor_quote_selector",
         )
         target_quote = next(q for q in vendor_reconciliations if q.doc_id == sel_doc)
 
@@ -297,7 +320,8 @@ else:
         items_df = pd.DataFrame([
             {
                 "SKU": i.product_id or "—",
-                "Name": i.product_name or "—",
+                # Fall back to description_and_specs if product_name was None
+                "Name / Description": i.product_name or i.description_and_specs or i.raw_text or "—",
                 "Quantity": i.quantity,
                 "Unit Price": format_currency(i.unit_price, target_quote.currency),
                 "Total Price": format_currency(i.total_price, target_quote.currency),
